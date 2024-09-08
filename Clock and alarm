@@ -1,0 +1,463 @@
+import machine, utime, math, tm1637,urtc, neopixel
+from machine import I2C, Pin
+from lcd_api import LcdApi
+from i2c_lcd import I2cLcd
+
+day_of_week = [ ' ', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun', 'Mon']
+month = [' ', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun','Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+# Initialize RTC (connected to I2C)
+i2c = I2C(1, scl=Pin(7), sda=Pin(6))
+rtc = urtc.DS3231(i2c)
+
+I2C1_ADDR = 39
+I2C1_NUM_ROWS = 2
+I2C1_NUM_COLS = 16
+
+I2C2_ADDR = 39
+I2C2_NUM_ROWS = 2
+I2C2_NUM_COLS = 16
+
+i2c1 = I2C(0, sda=machine.Pin(0), scl=machine.Pin(1), freq = 400000)
+lcd1 = I2cLcd(i2c1, I2C1_ADDR, I2C1_NUM_ROWS, I2C1_NUM_COLS)
+
+i2c2 = I2C(1, sda=machine.Pin(2), scl=machine.Pin(3), freq = 400000)
+lcd2 = I2cLcd(i2c2, I2C2_ADDR, I2C2_NUM_ROWS, I2C2_NUM_COLS)
+
+display = tm1637.TM1637(clk=Pin(5), dio=Pin(4))
+
+pixel_pin = 16
+pixel = neopixel.NeoPixel(machine.Pin(pixel_pin), 1)
+
+mode_button = machine.Pin(11, machine.Pin.IN, machine.Pin.PULL_DOWN)
+select_button = machine.Pin(10, machine.Pin.IN, machine.Pin.PULL_DOWN)
+up_button = machine.Pin(9, machine.Pin.IN, machine.Pin.PULL_DOWN)
+down_button = machine.Pin(8, machine.Pin.IN, machine.Pin.PULL_DOWN)
+thermo1 = machine.ADC(26)
+thermo2 = machine.ADC(27)
+led = machine.Pin(13, machine.Pin.OUT)
+buzzer = machine.Pin(12, machine.Pin.OUT)
+
+conversion_factor1 = 3.845 / 65535
+conversion_factor2 = 3.845 / 65535
+
+def tempIN(reading1):
+    Rt1 = 10 * reading1 / (3.3 - reading1) # calculate the resistance value
+    tempK1 = 1/(1/(273.15 + 25) + math.log(Rt1/10)/3950.0) # calculate temperature in Kelvins
+    return (int((tempK1 - 273.15)*10))/10
+
+def tempOUT(reading2):
+    Rt2 = 10 * reading2 / (3.3 - reading2)
+    tempK2 = 1/(1/(273.15 + 25) + math.log(Rt2/10)/3950.0)
+    return (int((tempK2 - 273.15)*10))/10
+
+def time_display():
+    timed = "%02d%02d%02d"%(timestamp[4:7])
+    HRdi = timed[0:2]
+    HRd = int(HRdi) + 1
+    if HRd == 24:
+        HRd = 0
+    MNdi = timed[2:4]
+    MNd = int(MNdi)
+    display.brightness(1)
+    display.numbers(HRd, MNd)
+
+def display_alarm():
+    timestamp = rtc.datetime()
+    display.brightness(0)
+    if a_M > timestamp.month or (a_M == timestamp.month and a_date_int > timestamp.day):
+        a_Md = str(a_M)
+        if len(a_Md) == 1:
+            a_Md = "0" + a_Md
+        display.show(a_date + a_Md)
+    if a_M == timestamp.month and a_date_int == timestamp.day:
+        display.numbers(a_hour_int, a_min_int)
+    if a_M < timestamp.month or (a_M == timestamp.month and a_date_int < timestamp.day) or (a_M == timestamp.month and a_date_int == timestamp.day and a_hour_int < (timestamp.hour + 1) or (a_M == timestamp.month and a_date_int == timestamp.day and a_hour_int == (timestamp.hour + 1) and a_min_int < timestamp.minute) or (a_M == timestamp.month and a_date_int == timestamp.day and a_hour_int == (timestamp.hour + 1) and a_min_int == timestamp.minute and timestamp.second > 0)):
+        display.show("    ")        
+
+def alarm_handler(pin):
+    global mode, a_date, a_date_int, a_M, a_hour_int, a_min_int
+    
+    mode = 0
+    
+    timestamp = rtc.datetime()
+    time_display()
+    utime.sleep(1.5)
+    display.show("    ")
+        
+    if mode_button.value() == 1:
+            mode = 1
+            
+    if mode == 1:
+        a_date_int = timestamp.day
+        a_date = str(a_date_int)
+        if len(a_date) == 1:
+            a_date = "0" + a_date
+        a_M = timestamp.month
+        a_month = month[a_M]
+        a_hour_int = timestamp.hour + 1
+        a_hour = str(a_hour_int)
+        if len(a_hour) == 1:
+            a_hour = "0" + a_hour
+        a_min_int = timestamp.minute
+        a_min = str(a_min_int)
+        if len(a_min) == 1:
+            a_min = "0" + a_min
+        lcd1.clear()
+        lcd1.move_to(3,0)
+        lcd1.putstr("Set Alarm")
+        lcd1.move_to(0,1)
+        lcd1.putstr("Date: " + str(a_date))
+        led.value(1)
+        buzzer.value(1)
+        utime.sleep(0.1)
+        led.value(0)
+        buzzer.value(0)
+    
+    while  mode == 1:
+        
+        if up_button.value() == 1:
+            a_date_int += 1
+            utime.sleep(0.5)
+            if a_date_int == 32:
+                a_date_int = 1
+        if down_button.value() == 1:
+            a_date_int -= 1
+            if a_date_int == 0:
+                a_date_int = 31
+            utime.sleep(0.5)
+        a_date = str(a_date_int)
+        if len(a_date) == 1:
+            a_date = "0" + a_date
+        lcd1.move_to(6,1)
+        lcd1.putstr(a_date)
+        
+        if select_button.value() == 1:
+            mode = 2
+            lcd1.move_to(0,1)
+            lcd1.putstr("                ")
+            lcd1.move_to(0,1)
+            lcd1.putstr("Month: " + a_month)
+            utime.sleep(0.5)
+            
+    while mode == 2:
+        if mode_button.value == 1:
+            mode = 0
+            utime.sleep(0.5)
+        if up_button.value() == 1:
+            a_M += 1
+            if a_M == 13:
+                a_M = 1
+            utime.sleep(0.5)
+        if down_button.value() == 1:
+            a_M -= 1
+            if a_M == 0:
+                a_M = 12
+            utime.sleep(0.5)
+        a_month = month[a_M]
+        lcd1.move_to(7,1)
+        lcd1.putstr(a_month)
+
+        if select_button.value() == 1:
+            mode = 3
+            lcd1.move_to(0,1)
+            lcd1.putstr("                ")
+            lcd1.move_to(0,1)
+            lcd1.putstr("Hour: " + a_hour)
+            utime.sleep(0.5)
+                
+    while mode == 3:
+        if mode_button.value() == 1:
+            mode = 0
+            utime.sleep(0.5)
+        if up_button.value() == 1:
+            a_hour_int += 1
+            if a_hour_int == 24:
+                a_hour_int = 0
+            utime.sleep(0.5)
+        if down_button.value() == 1:
+            a_hour_int -= 1
+            if a_hour_int == -1:
+                a_hour_int = 23
+            utime.sleep(0.5)
+        a_hour = str(a_hour_int)
+        if len(a_hour) == 1:
+            a_hour = "0" + a_hour
+        lcd1.move_to(6,1)
+        lcd1.putstr(a_hour)
+        
+        if select_button.value() == 1:
+            mode = 4
+            lcd1.move_to(0,1)
+            lcd1.putstr("                ")
+            lcd1.move_to(0,1)
+            lcd1.putstr("Minutes: " + a_min)
+            utime.sleep(0.5) 
+    
+    while mode == 4:
+        if mode_button.value() == 1:
+            mode = 0
+            utime.sleep(0.5)
+        if up_button.value() == 1:
+            a_min_int += 1
+            if a_min_int == 60:
+                a_min_int = 0
+            utime.sleep(0.5)
+        if down_button.value() == 1:
+            a_min_int -= 1
+            if a_min_int == -1:
+                a_min_int = 59
+            utime.sleep(0.5)
+        a_min = str(a_min_int)
+        if len(a_min) == 1:
+            a_min = "0" + a_min
+        lcd1.move_to(9,1)
+        lcd1.putstr(str(a_min))       
+
+        if select_button.value() == 1:
+            utime.sleep(0.5)
+            lcd1.clear()
+            lcd1.move_to(1,0)
+            lcd1.putstr("Alarm set for")
+            lcd1.move_to(1,1)
+            lcd1.putstr(a_date + " " + a_month + " / " + a_hour + ":" + a_min)
+            utime.sleep(2)
+            
+            timestamp = rtc.datetime()
+            DAY = day_of_week[timestamp.weekday]
+            D = timestamp.day
+            D1 = D
+            S1 = timestamp.second
+
+            MT = month[timestamp.month]
+            M = timestamp.month
+            H = int(timestamp[4]) + 1
+            H1 = H
+            Min1 = timestamp.minute
+            HR = str(H)
+            if len(HR) == 1:
+                HR = "0" + HR
+            time = HR + ":" + "%02d:%02d"%(timestamp[5:7])
+            date = DAY + " %02d "%(timestamp[2:3]) + MT + " %04d"%(timestamp[0:1])
+            lcd1.clear()
+            lcd1.move_to(0,0)
+            lcd1.putstr(date)
+            lcd1.move_to(4,1)
+            lcd1.putstr(time)
+            display_alarm()
+            mode = 0
+        
+mode_button.irq(trigger = machine.Pin.IRQ_RISING, handler = alarm_handler)                
+
+
+flag1 = 0
+flag2 = 0
+a_date_int = 1
+a_M = 6
+a_hour_int = 12
+a_min_int = 0
+
+timestamp = rtc.datetime()
+time_display()
+DAY = day_of_week[timestamp.weekday]
+D = timestamp.day
+D1 = D
+S1 = timestamp.second
+
+MT = month[timestamp.month]
+M = timestamp.month
+H = int(timestamp[4]) + 1
+H1 = H
+Min1 = timestamp.minute
+HR = str(H)
+if len(HR) == 1:
+    HR = "0" + HR
+time = HR + ":" + "%02d:%02d"%(timestamp[5:7])
+date = DAY + " %02d "%(timestamp[2:3]) + MT + " %04d"%(timestamp[0:1])
+
+display.show("    ")
+sentence = "                Livingroom project commissioned on Wednesday 1st May 2024                "
+w = len(sentence)- 14
+lcd1.clear()
+for i in range(w):
+    lcd1.move_to(0,0)
+    lcd1.putstr(sentence[(i-1):(i+15)])
+    utime.sleep(0.25)
+
+lcd1.clear()
+lcd1.move_to(0,0)
+lcd1.putstr(date)
+lcd1.move_to(4,1)
+lcd1.putstr(time)
+
+reading1 = thermo1.read_u16() * conversion_factor1
+reading2 = thermo2.read_u16() * conversion_factor2
+
+tempC1 = tempIN(reading1)
+if tempC1 > 99.9:
+    tempC1 = int(tempC1)
+
+tempC2 = tempOUT(reading2)
+if tempC2 > 99.9:
+    tempC2 = int(tempC2)
+
+lcd2.clear()
+lcd2.move_to(0,0)
+lcd2.putstr("Temp IN:")
+lcd2.move_to(10,0)
+lcd2.putstr(str(tempC1))
+lcd2.move_to(15,0)
+lcd2.putstr("C")
+lcd2.move_to(0,1)
+lcd2.putstr("Temp OUT:")
+lcd2.move_to(10,1)
+lcd2.putstr(str(tempC2))
+lcd2.move_to(15,1)
+lcd2.putstr("C")
+
+p = 0
+count = 0
+
+while True:
+    if p == 0:
+        pixel[0] = (10, 0, 0)
+    elif p == 1:
+        pixel[0] = (0, 10, 0)
+    else:
+        pixel[0] = (0, 0, 10)
+    pixel.write()
+    
+    timestamp = rtc.datetime()
+    
+    if a_date_int == timestamp.day and a_M == timestamp.month and a_hour_int == (timestamp.hour + 1) and a_min_int == timestamp.minute and timestamp.second == 0:
+        display.brightness(1)
+        hrd = timestamp.hour + 1
+        mnd = timestamp.minute
+        display.numbers(hrd,mnd)
+        for j in range (3):
+            for i in range (5):
+                buzzer.value(1)
+                utime.sleep(0.2)
+                buzzer.value (0)
+            utime.sleep(0.5)
+        display.show("    ")
+    
+    reading1 = thermo1.read_u16() * conversion_factor1
+    reading2 = thermo2.read_u16() * conversion_factor2
+    tempC1 = tempIN(reading1)
+    if tempC1 > 99.9:
+        tempC1 = int(tempC1)
+    tempC2 = tempOUT(reading2)
+    if tempC2 > 99.9:
+        tempC2 = int(tempC2)
+         
+    if tempC1 >= 75 or tempC2 >= 75:
+        led.value(1)
+        buzzer.value(1)
+        lcd2.move_to(10,0)
+        lcd2.putstr(str(tempC1))
+        lcd2.move_to(10,1)
+        lcd2.putstr(str(tempC2))
+        utime.sleep(0.25)
+        led.value(0)
+        utime.sleep(0.25)
+    else:
+        led.value(0)
+        buzzer.value(0)
+    
+    count += 1
+    
+    if count == 2000:
+        lcd2.move_to(10,0)
+        lcd2.putstr(str(tempC1))
+        lcd2.move_to(10,1)
+        lcd2.putstr(str(tempC2))
+        count = 0
+    
+    DAY = day_of_week[timestamp.weekday]
+    D = timestamp.day
+    D1 = D
+    MT = month[timestamp.month]
+    M = timestamp.month
+    H = int(timestamp[4]) + 1
+    HR = str(H)
+    if len(HR) == 1:
+        HR = "0" + HR
+    time = HR + ":" + "%02d:%02d"%(timestamp[5:7])
+    date = DAY + " %02d "%(timestamp[2:3]) + MT + " %04d"%(timestamp[0:1])
+    if H == 24:
+        HR = "00"
+        D+=1
+        DW = timestamp.weekday + 1
+        DATE = str(D)
+        if len(DATE) == 1:
+            DATE = "0" + DATE
+        if DW == 8:
+            DW = 1
+        DAY = day_of_week[DW]
+        YEAR = "%04d"%(timestamp[0:1])
+        if (M == 1 or M == 3 or M == 5 or M == 7 or M == 8 or M == 10) and D == 32:
+            DATE = "01"
+            M = M + 1
+            flag1 = 1
+        if (M == 4 or M == 6 or M == 9 or M == 11) and D == 31:
+            DATE = "01"
+            M = M + 1
+        if M == 1 and flag1 == 0 and (int(timestamp.year/4) == timestamp.year/4) and D == 30:
+            DATE = "01"
+            M = 2
+        if M == 1 and flag1 == 0 and (int(timestamp.year/4) != timestamp.year/4) and D == 29:
+            DATE = "01"
+            M = 2
+        if M == 12 and D == 32:
+            DATE = "01"
+            M = 1
+            YEAR = str(timestamp.year + 1)
+        MT = month[M]
+        
+        time = HR + ":" + "%02d:%02d"%(timestamp[5:7])
+        date = DAY + " " + DATE + " " + MT + " " + YEAR
+        
+    # Daylight saving time correction   
+    if D > 24 and D < 32 and M == 3 and DW == 0 and timestamp.second == 0 and timestamp.minute == 0 and H == 2:
+       H += 1
+       HR = "0" + str(H)
+       flag2 = 0
+       time = HR + ":" + "%02d:%02d"%(timestamp[5:7])
+    if D > 24 and D < 32 and M == 10 and DW == 0 and timestamp.second == 0 and timestamp.minute == 0 and H == 3 and flag2 == 0:
+        H -= 1
+        HR = "0" + str(H)
+        flag2 = 1
+        time = HR + ":" + "%02d:%02d"%(timestamp[5:7])
+    
+    
+    if D1 != D:
+        lcd1.move_to(0,0)
+        lcd1.putstr(date)
+        D1 = D
+    if H1 != H:
+        lcd1.move_to(4,1)
+        lcd1.putstr(HR)
+        H1 = H
+    if Min1 != timestamp.minute:
+        lcd1.move_to(7,1)
+        lcd1.putstr("%02d"%(timestamp.minute))
+        Min1 = timestamp.minute
+        display_alarm()
+    if S1 != timestamp.second:
+        lcd1.move_to(10,1)
+        lcd1.putstr("%02d"%(timestamp.second))
+        S1 = timestamp.second
+        
+        p+=1
+        if p == 3:
+            p = 0
+        
+    # Display time every quarter hour
+    if (Min1 == 0 or Min1 == 15 or Min1 == 30 or Min1 == 45) and S1 == 0:
+        buzzer.value(1)
+        utime.sleep(0.1)
+        buzzer.value(0)
+        time_display()
+        utime.sleep(1.5)
+        display.show("    ")
